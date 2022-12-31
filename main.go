@@ -184,9 +184,36 @@ func main() {
 	if err != nil {
 		fmt.Printf("error opening file: %v", err)
 	}
-	log.SetFormatter(&log.JSONFormatter{})
 	log.SetOutput(f)
-	log.SetLevel(log.InfoLevel)
+	loglevel := os.Getenv("LOG_LEVEL")
+	switch loglevel {
+	case "trace":
+		log.SetLevel(log.TraceLevel)
+	case "debug":
+		log.SetLevel(log.DebugLevel)
+	case "info":
+		log.SetLevel(log.InfoLevel)
+	case "warn":
+		log.SetLevel(log.WarnLevel)
+	case "error":
+		log.SetLevel(log.ErrorLevel)
+	case "fatal":
+		log.SetLevel(log.FatalLevel)
+	case "panic":
+		log.SetLevel(log.PanicLevel)
+	default:
+		log.SetLevel(log.WarnLevel)
+	}
+	formatter := &log.JSONFormatter{
+		FieldMap: log.FieldMap{
+			log.FieldKeyTime:  "@timestamp",
+			log.FieldKeyLevel: "@level",
+			log.FieldKeyMsg:   "@message",
+			log.FieldKeyFunc:  "@caller",
+		},
+	}
+
+	log.SetFormatter(formatter)
 
 	defer nc.End()
 
