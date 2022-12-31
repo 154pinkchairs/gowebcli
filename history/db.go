@@ -2,6 +2,7 @@ package history
 
 import (
 	"database/sql"
+	"os"
 	"sync"
 	"time"
 
@@ -33,6 +34,10 @@ type History struct {
 }
 
 func NewHistoryDB(dsn string) (*HistoryDB, error) {
+	err := os.MkdirAll("~/.local/share/gowebcli", 0700)
+	if err != nil {
+		log.Fatalf("Failed to create directory: %v", err)
+	}
 	db := &HistoryDB{
 		mux: &sync.Mutex{},
 		dsn: "~/.local/share/gowebcli/history.db",
