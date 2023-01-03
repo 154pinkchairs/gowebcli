@@ -4,27 +4,40 @@ import (
 	"bufio"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"os"
 	"time"
 
 	hist "github.com/154pinkchairs/gowebcli/history"
 	nc "github.com/rthornton128/goncurses"
-	log "github.com/sirupsen/logrus"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
+
+var (
+	Log *zap.SugaredLogger
+	DBPath, _ *hist.HistoryDB.
+)
+
+type Settings struct {
+	vimMode    bool
+	incognito  bool
+	forceHTTPS bool
+}
 
 func SetupUI() (err error, browserWin *nc.Window, UrlBar *nc.Window) {
 	stdscr, err := nc.Init()
 	if err != nil {
-		log.Fatal(err)
+		Log.Fatalf("Error initializing ncurses: %v", err)
 	}
 	h, w := stdscr.MaxYX()
 	BrowserWin, err := nc.NewWindow(h-1, w, 0, 0)
 	if err != nil {
-		log.Fatal(err)
+		Log.Fatalf("Error creating browser window: %v", err)
 	}
 	UB, err := nc.NewWindow(1, w, h-1, 0)
 	if err != nil {
-		log.Fatal(err)
+		Log.Fatalf("Error creating URL bar window: %v", err)
 	}
 	return err, BrowserWin, UB
 }
@@ -38,7 +51,7 @@ type URL struct {
 func (u *URL) MatchingHistory() ([]string, error) {
 	var urls []string
 
-	db, err := hist.NewHistoryDB("~/.local/share/gowebcli/history.db")
+	db, err := hist.NewHistoryDB()
 	if err != nil {
 		return nil, err
 	}
@@ -64,15 +77,15 @@ func (u *URL) MatchingHistory() ([]string, error) {
 func (u *URL) GetURLFromHistory(index int32) string {
 	var url string
 
-	db, err := hist.NewHistoryDB("~/.local/share/gowebcli/history.db")
+	db, err := hist.NewHistoryDB()
 	if err != nil {
-		log.Error(err)
+		Log.Errorf("Error opening history database: %v", err)
 	}
 	defer db.Close()
 
 	history, err := db.Get(index)
 	if err != nil {
-		log.Info(err)
+		Log.Infof("Error getting history: %v", err)
 	}
 
 	url = history.URL
@@ -95,33 +108,42 @@ func (u *URL) AddToHistory() error {
 	return nil
 }
 
-func (u *URL) GetURL() string {
-	db, err := hist.NewHistoryDB("~/.local/share/gowebcli/history.db")
+func (u *URL) GetURL() (string, Settings, error) {
+	settings := Settings{}
+	home, err := os.UserHomeDir()
 	if err != nil {
-		log.Error(err)
+		Log.Panicf("Error getting user's home directory: %v", err)
+		return "", settings, err
+	}
+	dbPath := filepath.Join(home, ".local/share/gowebcli/settings.db")
+	db, err := hist.NewHistoryDB(dbPath)
+	if err != nil {
+		Log.Warnf("Error opening history database: %v", err)
+		//start incognito mode if history database is not found
+		settings.incognito = true
 	}
 	defer db.Close()
 	err, _, UrlBar := SetupUI()
 	if err != nil {
-		log.Fatal(err)
+		Log.Fatalf("Error setting up UI: %v", err)
 	}
 	var historyIdxCur int32
 	var urlAddr string
 	histLen, err := hist.HDB.Count(db)
 	if err != nil {
-		log.Errorf("Error getting history length: %v", err)
+		Log.Errorf("Error getting history length: %v", err)
 	}
 	for {
 		c := UrlBar.GetChar()
 		cursorY, cursorX := UrlBar.CursorYX()
 		if c == nc.KEY_ENTER || c == 10 { // 10 is the ASCII code for a newline
 			if len(urlAddr) > 0 {
-				log.Info("Visiting:", urlAddr)
+				Log.Info("Visiting:", urlAddr)
 				u.urlAddr = urlAddr
 				u.timestamp = time.Now()
 				err = u.AddToHistory()
 				if err != nil {
-					log.Errorf("Error adding \"%s\" to history: %v", urlAddr, err)
+					Log.Errorf("Error adding \"%s\" to history: %v", urlAddr, err)
 					break
 				} else {
 					continue
@@ -135,7 +157,7 @@ func (u *URL) GetURL() string {
 			} else if c == nc.KEY_DC {
 				UrlBar.DelChar()
 				if err != nil {
-					log.Error(err)
+					Log.Error(err)
 				}
 				UrlBar.Refresh()
 			} else if c == nc.KEY_UP {
@@ -176,7 +198,7 @@ func (u *URL) GetURL() string {
 			UrlBar.Refresh()
 		}
 	}
-	return urlAddr
+	return urlAddr, settings, nil
 }
 
 func main() {
@@ -184,36 +206,37 @@ func main() {
 	if err != nil {
 		fmt.Printf("error opening file: %v", err)
 	}
-	log.SetOutput(f)
 	loglevel := os.Getenv("LOG_LEVEL")
+	var zapLevel zapcore.Level
 	switch loglevel {
 	case "trace":
-		log.SetLevel(log.TraceLevel)
+		zapLevel = zap.DebugLevel
 	case "debug":
-		log.SetLevel(log.DebugLevel)
+		zapLevel = zap.DebugLevel
 	case "info":
-		log.SetLevel(log.InfoLevel)
+		zapLevel = zap.InfoLevel
 	case "warn":
-		log.SetLevel(log.WarnLevel)
+		zapLevel = zap.WarnLevel
 	case "error":
-		log.SetLevel(log.ErrorLevel)
+		zapLevel = zap.ErrorLevel
 	case "fatal":
-		log.SetLevel(log.FatalLevel)
+		zapLevel = zap.FatalLevel
 	case "panic":
-		log.SetLevel(log.PanicLevel)
+		zapLevel = zap.PanicLevel
 	default:
-		log.SetLevel(log.WarnLevel)
+		zapLevel = zap.WarnLevel
 	}
-	formatter := &log.JSONFormatter{
-		FieldMap: log.FieldMap{
-			log.FieldKeyTime:  "@timestamp",
-			log.FieldKeyLevel: "@level",
-			log.FieldKeyMsg:   "@message",
-			log.FieldKeyFunc:  "@caller",
-		},
-	}
-
-	log.SetFormatter(formatter)
+	jsonEncoder := zap.NewDevelopmentEncoderConfig()
+	jsonEncoder.EncodeTime = zapcore.ISO8601TimeEncoder
+	jsonEncoder.EncodeLevel = zapcore.CapitalLevelEncoder
+	logger := zap.New(zapcore.NewCore(
+		zapcore.NewJSONEncoder(jsonEncoder),
+		zapcore.AddSync(f),
+		zap.NewAtomicLevelAt(zapLevel),
+	))
+	zap.AddCaller()
+	Log := logger.Sugar()
+	defer Log.Sync()
 
 	defer nc.End()
 
@@ -226,10 +249,17 @@ func main() {
 	for {
 		UrlBar.MovePrint(0, 0, "URL: ")
 		UrlBar.Refresh()
-		urlAddr := url.GetURL()
+		urlAddr, _, err := url.GetURL()
+		if err != nil {
+			Log.Errorf("Error getting URL: %v", err)
+			//clear the URL bar
+			UrlBar.MovePrint(0, 0, "URL: ")
+			UrlBar.Refresh()
+			continue
+		}
 		resp, err := http.Get(urlAddr)
 		if err != nil {
-			log.Println(err)
+			Log.Errorf("Error parsing URL: %s \n %v", urlAddr, err)
 			return
 		}
 		defer resp.Body.Close()
@@ -240,7 +270,7 @@ func main() {
 			browserWin.Refresh()
 		}
 		if err := scanner.Err(); err != nil {
-			log.Println(err)
+			Log.Errorf("Error reading respone body from %s: %v", urlAddr, err)
 			return
 		}
 	}
