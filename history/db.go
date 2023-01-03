@@ -3,6 +3,7 @@ package history
 import (
 	"database/sql"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -12,7 +13,7 @@ import (
 
 type HistoryDB struct {
 	Conn *sql.DB
-	dsn  string
+	DSN  string
 	mux  *sync.Mutex
 }
 
@@ -33,35 +34,45 @@ type History struct {
 	Timestamp time.Time
 }
 
-func NewHistoryDB(dsn string) (*HistoryDB, error) {
-	err := os.MkdirAll("~/.local/share/gowebcli", 0700)
+func NewHistoryDB() (*HistoryDB, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Fatalf("Error getting user's home directory: %v", err)
+		return nil, err
+	}
+	err = os.MkdirAll(filepath.Join(home, ".local/share/gowebcli/"), 0700)
 	if err != nil {
 		log.Fatalf("Failed to create directory: %v", err)
 	}
+
 	db := &HistoryDB{
 		mux: &sync.Mutex{},
-		dsn: "~/.local/share/gowebcli/history.db",
+		DSN: filepath.Join(home, ".local/share/gowebcli/history.db"),
 	}
 
-	if err := db.connect(); err != nil {
+	if err := Connect(db); err != nil {
 		log.Fatal(err)
 	}
 
 	return db, nil
 }
 
-func (db *HistoryDB) connect() error {
+func Connect(db *HistoryDB) error {
 	var err error
 
-	db.Conn, err = sql.Open("sqlite3", db.dsn)
+	dbConn, err := sql.Open("sqlite3", db.DSN)
 	if err != nil {
+		Log.Fatalf("Error opening database: %v", err)
 		return err
 	}
 
-	_, err = db.Conn.Exec("CREATE TABLE IF NOT EXISTS history (index INTEGER PRIMARY KEY, url TEXT, timestamp INTEGER)")
+	_, err = dbConn.Exec("CREATE TABLE IF NOT EXISTS history (index INTEGER PRIMARY KEY, url TEXT, timestamp TEXT)")
 	if err != nil {
+		Log.Fatalf("Error creating history table: %v", err)
 		return err
 	}
+
+	db.Conn = dbConn
 
 	return nil
 }
