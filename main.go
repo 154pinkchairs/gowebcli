@@ -2,10 +2,11 @@ package main
 
 import (
 	"bufio"
+	"database/sql"
 	"fmt"
 	"net/http"
-	"path/filepath"
 	"os"
+	"path/filepath"
 	"time"
 
 	hist "github.com/154pinkchairs/gowebcli/history"
@@ -16,7 +17,7 @@ import (
 
 var (
 	Log *zap.SugaredLogger
-	DBPath, _ *hist.HistoryDB.
+	DB  *hist.HistoryDB
 )
 
 type Settings struct {
@@ -47,17 +48,17 @@ type URL struct {
 	timestamp time.Time
 }
 
+func getDBConn() *sql.DB {
+	return DB.Conn
+}
+
 // query the history table for the values in url column at least partially matching the input string
 func (u *URL) MatchingHistory() ([]string, error) {
 	var urls []string
 
-	db, err := hist.NewHistoryDB()
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
+	defer hist.Close(DB)
 
-	rows, err := db.Conn.Query("SELECT url FROM history WHERE url LIKE ?", u.urlAddr+"%")
+	rows, err := DB.Conn.Query("SELECT url FROM history WHERE url LIKE ?", u.urlAddr+"%")
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +82,7 @@ func (u *URL) GetURLFromHistory(index int32) string {
 	if err != nil {
 		Log.Errorf("Error opening history database: %v", err)
 	}
-	defer db.Close()
+	defer hist.Close(DB)
 
 	history, err := db.Get(index)
 	if err != nil {
@@ -94,13 +95,11 @@ func (u *URL) GetURLFromHistory(index int32) string {
 }
 
 func (u *URL) AddToHistory() error {
-	db, err := hist.NewHistoryDB("~/.local/share/gowebcli/history.db")
-	if err != nil {
-		return err
-	}
-	defer db.Close()
+	var err error
+	getDBConn()
+	defer hist.Close(DB)
 
-	err = db.Add(u.urlAddr, u.timestamp)
+	err = hist.DB.Add(u.urlAddr, u.timestamp)
 	if err != nil {
 		return err
 	}
@@ -116,7 +115,7 @@ func (u *URL) GetURL() (string, Settings, error) {
 		return "", settings, err
 	}
 	dbPath := filepath.Join(home, ".local/share/gowebcli/settings.db")
-	db, err := hist.NewHistoryDB(dbPath)
+	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		Log.Warnf("Error opening history database: %v", err)
 		//start incognito mode if history database is not found
@@ -129,9 +128,19 @@ func (u *URL) GetURL() (string, Settings, error) {
 	}
 	var historyIdxCur int32
 	var urlAddr string
-	histLen, err := hist.HDB.Count(db)
+	DB, err = hist.InitDB()
 	if err != nil {
-		Log.Errorf("Error getting history length: %v", err)
+		Log.Warnf("Error initializing history database: %v", err)
+		settings.incognito = true
+	}
+	if !settings.incognito {
+		histLen, err := hist.Count(DB)
+		if err != nil {
+			Log.Errorf("Error getting history length: %v", err)
+		}
+		historyIdxCur = histLen
+	} else {
+		historyIdxCur = 0
 	}
 	for {
 		c := UrlBar.GetChar()
@@ -168,12 +177,22 @@ func (u *URL) GetURL() (string, Settings, error) {
 					UrlBar.Refresh()
 				} //end of keyup handling
 			} else if c == nc.KEY_DOWN {
-				if historyIdxCur < histLen {
-					historyIdxCur--
-					urlAddr = u.GetURLFromHistory(historyIdxCur)
+				if !settings.incognito {
+					histLen, err := hist.Count(DB)
+					if err != nil {
+						Log.Errorf("Error getting history length: %v", err)
+					}
+					if historyIdxCur < histLen {
+						historyIdxCur--
+						urlAddr = u.GetURLFromHistory(historyIdxCur)
+						UrlBar.MovePrint(0, 0, "urlAddr: "+urlAddr)
+						UrlBar.Refresh()
+					}
+				} else {
 					UrlBar.MovePrint(0, 0, "urlAddr: "+urlAddr)
 					UrlBar.Refresh()
-				} //end of keydown handling
+				}
+				//end of keydown handling
 			} else if c == nc.KEY_RIGHT {
 				//move one character to the right until the end of the line
 				if cursorX < len(urlAddr)+5 {
@@ -202,6 +221,7 @@ func (u *URL) GetURL() (string, Settings, error) {
 }
 
 func main() {
+	settings := Settings{}
 	f, err := os.OpenFile("gowebcli.log", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
 	if err != nil {
 		fmt.Printf("error opening file: %v", err)
@@ -227,17 +247,27 @@ func main() {
 		zapLevel = zap.WarnLevel
 	}
 	jsonEncoder := zap.NewDevelopmentEncoderConfig()
-	jsonEncoder.EncodeTime = zapcore.ISO8601TimeEncoder
+	//use a human readable time format (01 Jan 06 15:04:13.12345 MST)
+	jsonEncoder.EncodeTime = zapcore.TimeEncoderOfLayout("02 Jan 06 15:04:13.12345 MST")
 	jsonEncoder.EncodeLevel = zapcore.CapitalLevelEncoder
+	jsonEncoder.EncodeCaller = zapcore.ShortCallerEncoder
 	logger := zap.New(zapcore.NewCore(
 		zapcore.NewJSONEncoder(jsonEncoder),
 		zapcore.AddSync(f),
 		zap.NewAtomicLevelAt(zapLevel),
-	))
-	zap.AddCaller()
+	),
+		zap.AddCaller(),
+		//zap.AddCallerSkip(1),
+	)
 	Log := logger.Sugar()
+	hist.SetLogger(Log)
 	defer Log.Sync()
-
+	Log.Info("Starting gowebcli...")
+	DB, err = hist.InitDB()
+	if err != nil {
+		Log.Errorf("Error initializing history database: %v", err)
+		settings.incognito = true
+	}
 	defer nc.End()
 
 	err, browserWin, UrlBar := SetupUI()
