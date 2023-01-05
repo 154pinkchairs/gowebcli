@@ -2,10 +2,18 @@ module github.com/154pinkchairs/gowebcli
 
 go 1.19
 
-require github.com/rthornton128/goncurses v0.0.0-20220628231859-fd57939296e5
+require (
+	github.com/mattn/go-sqlite3 v1.14.16
+	github.com/rthornton128/goncurses v0.0.0-20220628231859-fd57939296e5
+	github.com/stretchr/testify v1.8.1
+	go.uber.org/zap v1.24.0
+)
 
 require (
-	github.com/mattn/go-sqlite3 v1.14.16 // indirect
-	github.com/sirupsen/logrus v1.9.0 // indirect
-	golang.org/x/sys v0.0.0-20220715151400-c0bba94af5f8 // indirect
+	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
+	github.com/stretchr/objx v0.5.0 // indirect
+	go.uber.org/atomic v1.10.0 // indirect
+	go.uber.org/multierr v1.9.0 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
