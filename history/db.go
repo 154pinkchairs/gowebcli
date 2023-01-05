@@ -14,7 +14,7 @@ import (
 type HistoryDB struct {
 	Conn *sql.DB // database connection
 	DSN  string  // database source name
-	mux  *sync.Mutex
+	Mux  *sync.Mutex
 }
 
 var (
@@ -33,7 +33,7 @@ type HDB interface {
 	Delete(index int32) error
 	DeleteAll() error
 	Count() (int32, error)
-	connect() error
+	Connect(*HistoryDB) error
 	Close() error
 }
 
@@ -75,7 +75,7 @@ func NewHistoryDB() (*HistoryDB, error) {
 	}
 
 	db := &HistoryDB{
-		mux: &sync.Mutex{},
+		Mux: &sync.Mutex{},
 		DSN: filepath.Join(home, ".local/share/gowebcli/history.db"),
 	}
 	if err := CreateTable(db); err != nil {
@@ -88,8 +88,8 @@ func NewHistoryDB() (*HistoryDB, error) {
 
 func CreateTable(db *HistoryDB) error {
 	Log.Debug("Connecting to history database")
-	db.mux.Lock()
-	defer db.mux.Unlock()
+	db.Mux.Lock()
+	defer db.Mux.Unlock()
 	dbConn, err := sql.Open("sqlite3", db.DSN)
 	if err != nil {
 		Log.Fatalf("Error opening database: %v", err)
@@ -112,10 +112,10 @@ func CreateTable(db *HistoryDB) error {
 	return nil
 }
 
-func (db *HistoryDB) connect() error {
+func (db *HistoryDB) Connect(*HistoryDB) error {
 	Log.Debug("Connecting to history database")
-	db.mux.Lock()
-	defer db.mux.Unlock()
+	db.Mux.Lock()
+	defer db.Mux.Unlock()
 	dbConn, err := sql.Open("sqlite3", db.DSN)
 	if err != nil {
 		Log.Fatalf("Error opening database: %v", err)
@@ -128,10 +128,10 @@ func (db *HistoryDB) connect() error {
 
 func (db *HistoryDB) Add(url string, timestamp time.Time) error {
 	Log.Debug("Adding to history database")
-	db.mux.Lock()
-	defer db.mux.Unlock()
+	db.Mux.Lock()
+	defer db.Mux.Unlock()
 	if db.Conn == nil {
-		if err := db.connect(); err != nil {
+		if err := db.Connect(db); err != nil {
 			Log.Errorf("Error connecting to database: %v", err)
 			return err
 		}
@@ -146,8 +146,8 @@ func (db *HistoryDB) Add(url string, timestamp time.Time) error {
 
 func (db *HistoryDB) Get(index int32) (*History, error) {
 	Log.Debugf("Fetching history entry with index %d", index)
-	db.mux.Lock()
-	defer db.mux.Unlock()
+	db.Mux.Lock()
+	defer db.Mux.Unlock()
 
 	var h History
 	err := db.Conn.QueryRow("SELECT * FROM history WHERE index = ?", index).Scan(&h.Index, &h.URL, &h.Timestamp)
@@ -160,8 +160,8 @@ func (db *HistoryDB) Get(index int32) (*History, error) {
 }
 
 func (db *HistoryDB) GetAll() ([]*History, error) {
-	db.mux.Lock()
-	defer db.mux.Unlock()
+	db.Mux.Lock()
+	defer db.Mux.Unlock()
 
 	rows, err := db.Conn.Query("SELECT * FROM history")
 	if err != nil {
@@ -185,8 +185,8 @@ func (db *HistoryDB) GetAll() ([]*History, error) {
 
 func (db *HistoryDB) Delete(index int32) error {
 	Log.Debugf("Deleting history entry with index %d", index)
-	db.mux.Lock()
-	defer db.mux.Unlock()
+	db.Mux.Lock()
+	defer db.Mux.Unlock()
 
 	_, err := db.Conn.Exec("DELETE FROM history WHERE index = ?", index)
 	if err != nil {
@@ -199,8 +199,8 @@ func (db *HistoryDB) Delete(index int32) error {
 
 func (db *HistoryDB) DeleteAll() error {
 	Log.Debug("Deleting all history entries")
-	db.mux.Lock()
-	defer db.mux.Unlock()
+	db.Mux.Lock()
+	defer db.Mux.Unlock()
 
 	_, err := db.Conn.Exec("DELETE FROM history")
 	if err != nil {
@@ -214,8 +214,8 @@ func (db *HistoryDB) DeleteAll() error {
 // count counts the number of rows in the history table
 func Count(db *HistoryDB) (int32, error) {
 	//Log.Debugf("Value of DB: %v", DB)
-	db.mux.Lock()
-	defer db.mux.Unlock()
+	db.Mux.Lock()
+	defer db.Mux.Unlock()
 	dbConn, err := sql.Open("sqlite3", db.DSN)
 	if err != nil {
 		Log.Fatalf("Error opening database: %v", err)
@@ -243,11 +243,10 @@ func Count(db *HistoryDB) (int32, error) {
 }
 
 func Close(db *HistoryDB) error {
-	db = DB
 	Log.Debug("Closing history database")
 	//lock the mutex to synchronize access to the database
-	db.mux.Lock()
-	defer db.mux.Unlock()
+	db.Mux.Lock()
+	defer db.Mux.Unlock()
 	if err := db.Conn.Close(); err != nil {
 		Log.Errorf("Error closing database: %v", err)
 		return err
